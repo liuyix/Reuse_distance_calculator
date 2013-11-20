@@ -4,9 +4,10 @@ __author__ = 'liuyix'
 
 #todo implement
 def do_main(filepath, outpath):
-    trace = read_trace(filepath)
-    sequence = count_distance(trace)
-    write_result(sequence, outpath)
+    #trace = read_trace(filepath)
+    #sequence = count_distance(trace)
+    #write_result(sequence, outpath)
+    calculate_online(filepath, outpath)
 
 
 def write_result(sequence, outpath='foo-distance-sequence.out'):
@@ -49,6 +50,44 @@ def count_distance(trace):
             distance_sequence.append(distance)
     pass
     return distance_sequence
+
+
+def calculate_online(filename, outpath):
+    assert os.path.isfile(filename)
+
+    # 用addr_map确保所有distinct_addr_sequence都对应唯一的addr
+    addr_map = {}
+    distinct_addr_idx_sequence = []
+
+    #reuse_distance_buffer = []
+    output_fileobj = open(outpath, 'w')
+
+    with open(filename) as trace_fileobj:
+        for idx, line in enumerate(trace_fileobj):
+            laddr = line.split(':')[0]
+            if laddr not in addr_map:
+                addr_map[laddr] = idx
+                distinct_addr_idx_sequence.append(idx)
+                # -1表示负无穷
+                reuse_distance = sys.maxint
+            else:
+                #当前addr出现过，那么计算上一次addr出现的位置到最后的距离即可
+                old_idx = addr_map[laddr]
+                last_distinct_location = distinct_addr_idx_sequence.index(old_idx)
+                reuse_distance = len(distinct_addr_idx_sequence) - last_distinct_location - 1
+                distinct_addr_idx_sequence.remove(old_idx)
+                distinct_addr_idx_sequence.append(idx)
+                addr_map[laddr] = idx
+                #reuse_distance_buffer.append(reuse_distance)
+
+            if reuse_distance < sys.maxint:
+                output_fileobj.write("%d\n" % reuse_distance)
+                #if len(reuse_distance_buffer) > 10000:
+                #    #output_fileobj.writelines([str(reuse_distance_buffer[n])+'\n' for n in reuse_distance_buffer])
+                #    for dist in reuse_distance_buffer:
+                #        output_fileobj.write("%d\n" % dist)
+                #    del reuse_distance_buffer
+    output_fileobj.close()
 
 
 if __name__ == "__main__":
