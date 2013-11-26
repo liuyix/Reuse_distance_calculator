@@ -33,9 +33,10 @@ def calculate_online(filename, outpath):
                 distinct_addr_idx_sequence.append(idx)
                 addr_map[laddr] = idx
 
-            if reuse_distance < sys.maxint:
-                # 不记录第一次出现的addr
-                output_fileobj.write("%d\n" % reuse_distance)
+            #if reuse_distance < sys.maxint:
+            #    # 不记录第一次出现的addr
+            #    output_fileobj.write("%d\n" % reuse_distance)
+            output_fileobj.write("%d\n" % reuse_distance)
     output_fileobj.close()
 
 
