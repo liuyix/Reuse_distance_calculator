@@ -16,13 +16,13 @@ def calculate_online(filename, outpath, dupfile=None):
     if dupfile is None:
         duplicate_trace = open(filename + '.mod.trace', 'w')
     else:
-        duplicate_trace = open(dupfile)
+        duplicate_trace = open(dupfile, 'w')
 
     with open(filename) as trace_fileobj:
         valid_info = {'src': 'unknown', 'linum': '-1', 'col': '-1'}
         for idx, line in enumerate(trace_fileobj):
             # TODO: 格式相关！！！
-            line_infos = line.split(':')
+            line_infos = [l.strip() for l in line.split(' : ')]
             if line_infos[-1].strip() != 'unknown':
                 #logging.debug('found: %s', line_infos[-1])
                 valid_info['src'] = line_infos[-1]
