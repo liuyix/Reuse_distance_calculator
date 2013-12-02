@@ -1,24 +1,9 @@
 #coding:utf-8
 __author__ = 'liuyix'
 
-import logging
+from logger import setup_logging
 
-logger = None
-
-
-def setup_logging(console=True, filelog=True):
-    l_logger = logging.getLogger('locate_src')
-    l_logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(funcName)s - %(levelname)s - %(lineno)d - %(message)s')
-    if filelog:
-        file_handler = logging.FileHandler('locate_src.log')
-        file_handler.setFormatter(formatter)
-        l_logger.addHandler(file_handler)
-    if console:
-        stream_handler = logging.StreamHandler()
-        stream_handler.setFormatter(formatter)
-        l_logger.addHandler(stream_handler)
-    return l_logger
+logger = setup_logging(console=True, logfile='locate_src.log', filelog=True)
 
 
 def find_src(trace_name, filter_name, result_file):
@@ -39,7 +24,6 @@ def find_src(trace_name, filter_name, result_file):
                         result.write(line.rstrip() + ' ' + ' '.join(src_info))
                     else:
                         result.write(line)
-    pass
 
 
 def usage():
@@ -50,10 +34,12 @@ def usage():
 if __name__ == "__main__":
     # TODO 使用argparse
     import sys
-
-    logger = setup_logging()
+    import os
 
     if len(sys.argv) == 4:
+        assert os.path.isfile(sys.argv[1]) \
+                   and os.path.isfile(sys.argv[2]) \
+            and os.path.exists(os.path.dirname(sys.argv[3]))
         find_src(*sys.argv[1:])
     else:
         usage()
