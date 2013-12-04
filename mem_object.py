@@ -14,7 +14,7 @@ import math
 
 
 class OnchipBase(object):
-    def __init__(self, line_sz, total_sz, logger=None):
+    def __init__(self, line_sz, total_sz, logger=None, console=True, filelog=False):
         assert isinstance(line_sz, int)  \
             and isinstance(total_sz, int)  \
             and line_sz > 0 \
@@ -24,7 +24,7 @@ class OnchipBase(object):
         self.line_count = total_sz / line_sz
         if logger is None:
             from logger import setup_logging
-            self.logger = setup_logging(filelog='mem_simulation.log')
+            self.logger = setup_logging(console=console, logfile='mem_simulation.log', filelog=filelog)
         else:
             self.logger = logger
         self.line_szbit = int(math.log(self.line_size, 2))
@@ -39,8 +39,7 @@ class ScratchpadMemory(OnchipBase):
     def hot_addr(self, trace):
         memory_dict = {}
         for line in trace:
-            addr = extract_vaddr(line) #long(line.split(' : ')[0].strip(), 16)
-            #logger.debug("addr: %s", hex(addr))
+            addr = extract_vaddr(line)
             page_addr = self.page_addr(addr)
             if page_addr in memory_dict:
                 memory_dict[page_addr] += 1
@@ -183,23 +182,21 @@ def extract_vaddr(line):
 
 def do_simple_test(trace='./simple_matrix/thread0-trace.out'):
     trace_file = open(trace, 'r')
+
     file_line_count = wccount(trace)
     trace_begin = int(68365.0 / 268569.0 * file_line_count)
     trace_end = int(151920.0 / 268569.0 * file_line_count)
-    logger.info("line count: %d", file_line_count)
-    logger.info("begin: %d, end: %d", trace_begin, trace_end)
     phase = trace_file.readlines()[trace_begin:trace_end]
 
-    #for totalsize in [16, 32, 64, 128, 256]:
-    #    #for blksz in [32, 64, 128]:
-    #    blksz = 256
-    #    print("total size: %dkB | block: %dB" %(blksz, totalsize))
-    #    spm = ScratchpadMemory(blksz, 1024 * totalsize, logger)
-    #    print("spm miss ratio: %.3f" % spm.simulate(phase))
-    #    dcache = DataCache(blksz, totalsize * 1024, logger)
-    #    print("cache miss ratio: %.3f", dcache.simulate(phase))
+    logger.info("line count: %d", file_line_count)
+    logger.info("begin: %d, end: %d", trace_begin, trace_end)
 
-    #for spmsize in [0, 16, 32, 64, 128, 256]:
+    # output settings
+    from csv_helper import CsvHelper
+    csvhelper = CsvHelper('matrix-result.csv')
+
+    csvhelper.write_row(('spm_size(KB)', 'spm_block_size', 'cache_size(KB)',
+                         'cache_line_size', 'associative', 'spm_miss', 'cache_miss'))
     for spmsize in [0, 4, 8, 16, 32]:
         #for blksz in [32, 64, 128]:
         blksz = 256
@@ -215,8 +212,9 @@ def do_simple_test(trace='./simple_matrix/thread0-trace.out'):
         print 'Scratchpad size: %dKB\tblock:%d\nCache size:%dKB\tblock: %d' \
               % (spmsize / 1024, blksz, cache_totalsz / 1024, cache_linesz)
 
-        print 'spm_miss: %.3f\tcache_miss: %.3f' %(spm_miss, cache_miss)
-        #save_as_csv()
+        print 'spm_miss: %.3f\tcache_miss: %.3f' % (spm_miss, cache_miss)
+        csvhelper.write_row([str(n) for n in [spmsize/1024, blksz,
+                           cache_totalsz/1024, cache_linesz, 4, spm_miss, cache_miss]])
 
 
 def wccount(filename):
