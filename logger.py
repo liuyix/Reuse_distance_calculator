@@ -3,11 +3,10 @@ __author__ = 'liuyix'
 
 import logging
 
-
-def setup_logging(console=True, logfile='foo.log', filelog=True):
+def setup_logging(console=True, logfile='foo.log', filelog=True, level=logging.DEBUG):
     assert isinstance(console, bool) and isinstance(filelog, bool) and isinstance(logfile, str)
     l_logger = logging.getLogger('locate_src')
-    l_logger.setLevel(logging.DEBUG)
+    l_logger.setLevel(level)
     formatter = logging.Formatter('%(funcName)s - %(lineno)d - %(levelname)s - %(message)s')
     if filelog:
         file_handler = logging.FileHandler(logfile)
