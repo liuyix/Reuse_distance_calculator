@@ -11,10 +11,12 @@ __author__ = 'liuyix'
 # 得到的实验输出做成csv格式或者是用matplotlib直接成图。
 
 import math
+import logging
 
 
 class OnchipBase(object):
-    def __init__(self, line_sz, total_sz, logger=None, console=True, filelog=False):
+    def __init__(self, line_sz, total_sz, logger=None, console=True, filelog=False, level=logging.ERROR):
+        import sys
         assert isinstance(line_sz, int)  \
             and isinstance(total_sz, int)  \
             and line_sz > 0 \
@@ -24,7 +26,7 @@ class OnchipBase(object):
         self.line_count = total_sz / line_sz
         if logger is None:
             from logger import setup_logging
-            self.logger = setup_logging(console=console, logfile='mem_simulation.log', filelog=filelog)
+            self.logger = setup_logging(console=console, logfile='mem_simulation.log', filelog=filelog, level=level)
         else:
             self.logger = logger
         self.line_szbit = int(math.log(self.line_size, 2))
@@ -33,13 +35,20 @@ class OnchipBase(object):
     def page_addr(self, vaddr):
         return vaddr & (sys.maxint << self.line_szbit)
 
+    @staticmethod
+    def extract_vaddr(line, simple_debug=False):
+        assert isinstance(line, str)
+        if not simple_debug:
+            return long(line.split(':')[0].strip(), 16)
+        return long(line, 16)
+
 
 class ScratchpadMemory(OnchipBase):
 
     def hot_addr(self, trace):
         memory_dict = {}
         for line in trace:
-            addr = extract_vaddr(line)
+            addr = self.extract_vaddr(line)
             page_addr = self.page_addr(addr)
             if page_addr in memory_dict:
                 memory_dict[page_addr] += 1
@@ -72,19 +81,24 @@ class DataCache(OnchipBase):
     """
     associative: 表示相联配置,-1/0/2/4/8/16/,-1表示全相联
     暂时只实现组相联
-    遇到问题：做cache必须要用到phyaddr，不然不同进程的vaddr相同不是就错了！
+    遇到问题：做cache必须要用到phyaddr，不然不同进程的vaddr相同不是就错了！单个进程该假定是正确的。
+
+    相联选址备忘：最后lg(linesize)位屏蔽，之后的lg(totalsz)-lg(linesz)-lg(associative)作为分组的id
+        之后组内是set结构，大小为associative
     """
 
-    def __init__(self, line_sz, total_sz, associative=4, logger=None):
+    def __init__(self, line_sz, total_sz, associative=4, logger=None, level=logging.ERROR):
 
         # line_size * associative * group_size = total_size
-        super(DataCache, self).__init__(line_sz, total_sz, logger)
+        super(DataCache, self).__init__(line_sz, total_sz, logger, level=level)
         self.associative = associative
         # 总共的组数
-        self.group_count = self.line_count / self.associative
-        self.group_szbit = int(math.log(self.group_count, 2))
+        self.group_total = self.line_count / self.associative
+        group_id_bitlength = self.total_szbit - self.line_szbit - int(math.log(self.associative, 2))
+        self.mask = (sys.maxint >> (int(math.log(sys.maxint, 2)) - group_id_bitlength))
         # pre allocation
-        self.__list = [set()] * self.group_count
+        self.__list = [None] * self.group_total
+        self.logger.debug('cache list: %s',self.__list)
         self.hit_cnt = 0.0
         self.access_cnt = 0.0
         self.swap_cnt = 0.0
@@ -93,7 +107,7 @@ class DataCache(OnchipBase):
         self.hit_cnt = 0.0
         self.access_cnt = 0.0
         self.swap_cnt = 0.0
-        self.__list = [set()] * self.group_count
+        self.__list = [None] * self.group_total
 
     def hit_ratio(self):
         if self.access_cnt == 0:
@@ -102,6 +116,7 @@ class DataCache(OnchipBase):
 
     def miss_ratio(self):
         if self.access_cnt == 0:
+            self.logger.warn("total access is 0!")
             return -1
         return 1 - self.hit_ratio()
 
@@ -114,23 +129,38 @@ class DataCache(OnchipBase):
     def group_id(self, vaddr):
         assert isinstance(vaddr, long)
         # 取vaddr的低log(cache_size)位,高位清零
-        cache_addr = vaddr & (sys.maxint >> (int(math.log(sys.maxint, 2)) - self.total_szbit))
-        return cache_addr >> (self.line_szbit + self.group_szbit)
+        gid = (vaddr >> self.line_szbit) & self.mask
+        return gid
 
     def access(self, vaddr):
+        """
+        group_set None
+        """
         gid = self.group_id(vaddr)
+        self.logger.debug('=' * 80)
+        self.logger.debug('vaddr: %s', bin(vaddr))
+        self.logger.debug('gid: %s', bin(gid))
         group_set = self.__list[gid]
-        assert len(group_set) <= self.group_count
-
+        if group_set is None:
+            self.__list[gid] = set()
+            group_set = self.__list[gid]
+        assert len(group_set) <= self.associative
         self.access_cnt += 1
         page_addr = self.page_addr(vaddr)
+
+        self.logger.debug('group set content: \n%s', group_set)
+
         if page_addr in group_set:
+            self.logger.debug("hit: page_addr: %s", bin(page_addr))
             self.hit_cnt += 1
             return True
-        elif len(group_set) < self.group_count:
+        elif len(group_set) < self.associative:
+            self.logger.debug('miss: page_addr: %s, add directly', bin(page_addr))
             group_set.add(page_addr)
         else:
-            group_set.pop()
+            self.logger.debug('miss: page_addr: %s, swap', bin(page_addr))
+            laddr = group_set.pop()
+            self.logger.debug("swap: %s", bin(laddr))
             group_set.add(page_addr)
             self.swap_cnt += 1
         return False
@@ -139,21 +169,20 @@ class DataCache(OnchipBase):
         assert isinstance(trace, list)
 
         for line in trace:
-            vaddr = extract_vaddr(line)
+            vaddr = self.extract_vaddr(line)
             self.access(vaddr)
-        #print 'Cache Miss ratio: %.3f' % self.miss_ratio()
         return self.miss_ratio()
 
 
 class HybridCache:
-    def __init__(self, spm_size, spm_linesize, cache_size, cacheline_size, associative, logger=None):
+    def __init__(self, spm_size, spm_linesize, cache_size, cacheline_size, associative, logger=None, level=logging.ERROR):
         assert not (spm_size == 0 and cache_size == 0)
         if spm_size != 0:
             self.__spm = ScratchpadMemory(spm_linesize, spm_size, logger=logger)
         else:
             self.__spm = None
         if cache_size != 0:
-            self.__dcache = DataCache(cacheline_size, cache_size, associative=associative, logger=logger)
+            self.__dcache = DataCache(cacheline_size, cache_size, associative=associative, logger=logger, level=level)
         else:
             self.__dcache = None
 
@@ -167,7 +196,8 @@ class HybridCache:
             # http://stackoverflow.com/a/1157160
             # remove all occurences in list
             if self.__dcache is not None:
-                trace_cache = filter(lambda x: extract_vaddr(x) not in inst_list[:self.__spm.line_count], trace)
+                trace_cache = \
+                    filter(lambda x: OnchipBase.extract_vaddr(x) not in inst_list[:self.__spm.line_count], trace)
                 #logger.debug('trace size: %d\treduced size: %d' % (len(trace), len(trace_cache)))
                 cache_miss = self.__dcache.simulate(trace_cache)
         else:
@@ -175,65 +205,17 @@ class HybridCache:
         return spm_miss, cache_miss
 
 
-def extract_vaddr(line):
-    assert isinstance(line, str)
-    return long(line.split(':')[0].strip(), 16)
 
 
-def do_simple_test(trace='./simple_matrix/thread0-trace.out'):
-    trace_file = open(trace, 'r')
-
-    file_line_count = wccount(trace)
-    trace_begin = int(68365.0 / 268569.0 * file_line_count)
-    trace_end = int(151920.0 / 268569.0 * file_line_count)
-    phase = trace_file.readlines()[trace_begin:trace_end]
-
-    logger.info("line count: %d", file_line_count)
-    logger.info("begin: %d, end: %d", trace_begin, trace_end)
-
-    # output settings
-    from csv_helper import CsvHelper
-    csvhelper = CsvHelper('matrix-result.csv')
-
-    csvhelper.write_row(('spm_size(KB)', 'spm_block_size', 'cache_size(KB)',
-                         'cache_line_size', 'associative', 'spm_miss', 'cache_miss'))
-    for spmsize in [0, 4, 8, 16, 32]:
-        #for blksz in [32, 64, 128]:
-        blksz = 256
-        #cache_totalsz = (256 - spmsize) * 1024
-        cache_totalsz = (32 - spmsize) * 1024
-        spmsize *= 1024
-        cache_linesz = 64
-        hybrid = HybridCache(spmsize, blksz, cache_totalsz, cache_linesz, 4)
-        #hybrid = HybridCache(spmsize * 256, blksz, cache_totalsz * 256, cache_linesz, 4)
-        spm_miss, cache_miss = hybrid.simulate(phase)
-        print '------------------------------------------------------'
-        print 'Configuration:'
-        print 'Scratchpad size: %dKB\tblock:%d\nCache size:%dKB\tblock: %d' \
-              % (spmsize / 1024, blksz, cache_totalsz / 1024, cache_linesz)
-
-        print 'spm_miss: %.3f\tcache_miss: %.3f' % (spm_miss, cache_miss)
-        csvhelper.write_row([str(n) for n in [spmsize/1024, blksz,
-                           cache_totalsz/1024, cache_linesz, 4, spm_miss, cache_miss]])
-
-
-def wccount(filename):
-    import subprocess
-    out = subprocess.Popen(['wc', '-l', filename],
-                           stdout=subprocess.PIPE,
-                           stderr=subprocess.STDOUT
-    ).communicate()[0]
-    return int(out.partition(b' ')[0])
-
+def test_cache():
+    f = open('./phase-1', 'r')
+    lines = f.readlines()
+    dc = DataCache(64, 32 * 1024, 4, level=logging.ERROR)
+    dc.simulate(lines)
+    print 'miss: ', dc.miss_ratio()
+    print 'total hit: ', dc.hit_cnt
+    print 'total access: ', dc.access_cnt
 
 if __name__ == "__main__":
     import sys
-
-    from logger import setup_logging
-    logger = setup_logging(console=False, logfile='mem_simulation.log')
-    do_simple_test()
-    #if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
-    #    from logger import setup_logging
-    #    logger = setup_logging(logfile='mem_simulation.log')
-    #    do_simple_test()
-    #    pass
+    test_cache()
